@@ -1,0 +1,453 @@
+---
+title: "Examen final Modules 4 et 5"
+author: "Sophie Chantalat"
+subtitle: "DUBii 2021"
+date: "`r format(Sys.time(), '%d %B, %Y')`"
+
+output:
+    html_document:
+      self_contained: true
+      number_sections: false
+      code_folding: "hide"
+      toc: true
+      toc_depth: 3
+      toc_float: true
+  
+---
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(eval=FALSE, echo =TRUE, cache = FALSE, message = FALSE, warning = FALSE, cache.lazy = FALSE,
+                      fig.height = 3.5, fig.width = 10.5)
+```
+
+# Consignes {-}
+
+Complétez ce document en remplissant les chunks vides pour écrire le code qui vous a permis de répondre à la question. Les réponses attendant un résultat chiffré ou une explication devront être insérés entre le balises html `code`. Par exemple pour répondre à la question suivante :
+
+    La bioinfo c'est : <code>MERVEILLEUX</code>.
+    
+N'hésitez pas à commenter votre code, enrichir le rapport en y insérant des résultats ou des graphiques/images pour expliquer votre démarche. N'oubliez pas les **bonnes pratiques** pour une recherche **reproductible** !
+Nous souhaitons à minima que l'analyse soit reproductible sur le cluster de l'IFB.
+
+# Introduction {-}
+
+Vous allez travailler sur des données de reséquençage d'un génome bactérien : _Bacillus subtilis_. Les données sont issues de cet article :
+
+* [Complete Genome Sequences of 13 Bacillus subtilis Soil Isolates for Studying Secondary Metabolite Diversity](https://mra.asm.org/content/9/2/e01406-19)
+
+# Récupération du projet dans mon home et transfert du dossier dans mon github
+```{bash}
+git clone git@github.com:sophiechroma/DuBII2021
+
+cd /shared/home/schantalat/Evaluation_M5-6/DuBII2021
+
+# récupération du dossier main.zip dans DuBII2021
+wget https://github.com/DU-Bii/EvaluationM4M5/archive/refs/heads/main.zip
+
+# vérifiation du status de mon git (qu'il n'y a rien en attente)
+git status
+
+# ajout de mon dossier
+git add main.zip
+
+# On commit puis on le push vers le github sur la branche principale
+git status
+git commit -m "Transfert_Dossier_zip_EvalM5-6"
+git status
+git push origin master
+```
+
+J'ai ensuite vérifié sur mon github que le transfert était bien fait . Suivre le [lien Github](https://github.com/sophiechroma/DuBII2021.git)
+
+# Analyses
+
+## Organisation de votre espace de travail
+
+Création du dossier qui contiendra l'ensemble des éléments liés au projet. Les données récupérées seront stockées dans "data", le code (si écriture de scripts) dans "bin" et les analyses seront stockées dans "results".
+
+```{bash}
+cd /shared/home/schantalat/Evaluation_M5-6
+pwd
+```
+
+```{bash}
+mkdir  Bacillus_subtilis_Project
+cd Bacillus_subtilis_Project
+mkdir  data bin results doc
+ls
+```
+
+```{bash}
+cd results/
+mkdir  QC CLEANING FASTQ MAPPING
+ls
+
+```
+## Téléchargement des données brutes
+
+Récupérez les fichiers FASTQ issus du run **SRR10390685** grâce à l'outil <strong class="tool">sra-tools</strong> @sratoolkit
+
+Pour récupérer le SRR10390685, je suis allée sur l'article et j'ai cliqué sur PRJNA587401. J'ai ensuite cliqué sur  "30" SRA experiments. Puis, sur le [lien NCBI](https://www.ncbi.nlm.nih.gov/sra?linkname=bioproject_sra_all&from_uid=587401), j'ai entré directement la recherche SRR10390685 (pour une recherche plus rapide). Je suis ensuite allée sur le [lien "SRR10390685"](https://trace.ncbi.nlm.nih.gov/Traces/sra/?run=SRR10390685). Cela me permet d'avoir une première idée du **nombre de reads (7,1 millions)** et de vérifier qu'il s'agit de **données pairées**, ce qui me permet de choisir mon mode de récupération des fastq.
+
+```{bash}
+salloc --cpus-per-task=10 --mem=1G
+module load sra-tools/2.10.3
+
+srun --cpus-per-task=6 fasterq-dump --split-files -p SRR10390685 --outdir FASTQ
+
+# compression des fastq :
+cd FASTQ
+srun gzip *.fastq
+rm *.fastq
+
+```
+
+Combien de reads sont présents dans les fichiers R1 et R2 ?
+
+```{bash}
+zgrep "^+" SRR10390685_1.fastq.gz | head
+zgrep "^+" SRR10390685_1.fastq.gz | wc -l
+zgrep "^+" SRR10390685_2.fastq.gz | wc -l
+
+```
+
+Les fichiers FASTQ contiennent <code>7066055</code> reads.
+
+Téléchargez le génome de référence de la souche ASM904v1 de _Bacillus subtilis_ disponible à [cette adresse](https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.fna.gz)
+
+```{bash}
+cd ../..
+cd data/
+
+```
+
+```{bash}
+wget https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.fna.gz
+
+```
+Quelle est la taille de ce génome ?
+
+```{bash}
+
+zcat GCF_000009045.1_ASM904v1_genomic.fna.gz | head
+# J'ai recherché à éliminer le header. Test avec grep dans un premier temps pour voir si je sélectionnais bien la bonne ligne.
+zcat GCF_000009045.1_ASM904v1_genomic.fna.gz | grep ">" | less
+
+# puis, lancement avec grep -v pour éliminer le header du fasta :
+zcat GCF_000009045.1_ASM904v1_genomic.fna.gz | grep -v ">" | head
+
+# et enfin, count avec wc -m
+zcat GCF_000009045.1_ASM904v1_genomic.fna.gz | grep -v ">" |wc -m
+
+```
+
+Je suis allée vérifier sur ncbi pour vérifier mon résultat en suivant le [lien ncbi GCF__000009045.1](https://www.ncbi.nlm.nih.gov/assembly/GCF_000009045.1/). Cela renvoie 4,215,606 bp. Je me suis rendue compte que j'avais oublé de tenir compte du retour à la ligne \n dans le comptage. J'ai donc utilisé la commande tr avec l'option -d pour déléter ce retour à la ligne.
+
+
+```{bash}
+zcat GCF_000009045.1_ASM904v1_genomic.fna.gz | grep -v ">" | tr -d "\n" | wc -m
+```
+
+Vérification avec l'outil seqkit:
+
+```{bash}
+module load seqkit/0.14.0
+seqkit stats GCF_000009045.1_ASM904v1_genomic.fna.gz 
+
+```
+
+La taille de ce génome est de <code>4215606</code> paires de bases.
+ce qui est en accord avec les données sur ncbi et avec ma seconde méthode avec seqkit.
+
+
+Téléchargez l'annotation de la souche ASM904v1 de _Bacillus subtilis_ disponible à [cette adresse](https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.gff.gz)
+
+```{bash}
+wget https://ftp.ncbi.nlm.nih.gov/genomes/all/GCF/000/009/045/GCF_000009045.1_ASM904v1/GCF_000009045.1_ASM904v1_genomic.gff.gz
+
+```
+
+Combien de gènes sont connus pour ce génome ?
+
+Pour avoir une idée de la structure du fichier gff, j'ai fait un "less" dessus.
+Puis, j'ai vu que l'information "gene" était dans la colonne 3.
+
+```{bash}
+zcat GCF_000009045.1_ASM904v1_genomic.gff.gz | less
+# récupération de la colonne 3
+zcat GCF_000009045.1_ASM904v1_genomic.gff.gz | cut -f 3 | less
+# récupération des lignes contenant"gene" avec grep (je finis par head pour vérifier que j'ai bien la sortie que je veux)
+zcat GCF_000009045.1_ASM904v1_genomic.gff.gz | cut -f 3 | grep "gene" | head
+# comptage du nombre de lignes
+zcat GCF_000009045.1_ASM904v1_genomic.gff.gz | cut -f 3 | grep "gene" | wc -l
+
+```
+
+<code>4536</code> gènes sont recensés dans le fichier d'annotation. 4260 étaient repertoriés dans Uniprot mais ref à un article de 1997).
+
+## Contrôle qualité
+
+Lancez l'outil <strong class="tool">fastqc</strong> @fastqc dédié à l'analyse de la qualité des bases issues d'un séquençage haut-débit
+
+```{bash}
+cd ..
+cd results/
+module load fastqc/0.11.9
+srun --cpus-per-task 8 fastqc FASTQ/SRR10390685_*.fastq.gz -o QC/ -t 8
+# je n'ai pas lancé de job array car je n'avais que deux fastq à traiter.
+
+# J'ai transféré les rapports html dans l'un de mes répertoires sur le cluster du CNRGH, pour les ouvrir enuite avec firefox
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/results/QC/*.html .
+
+```
+
+La qualité des bases vous paraît-elle satisfaisante ? Pourquoi ?
+
+- [X] Oui
+- [ ] Non
+
+
+car <code> toutes les bases des reads 1 et 2 ont un Q score supérieur à 28 </code> comme le montre <code> le graphe sur le Per base sequence quality</code>. Par contre, le taux de duplicats est élevé (de 40 à 50%), ce qui indique certainement qu'il y a eu trop de cycles PCR lors de la synthèse de la library.
+
+Lancement de MultiQC :
+```{bash}
+
+module load multiqc/1.9
+
+cd FASTQ
+multiqc . 
+mv multiqc_data multiqc_report.html ../QC/
+
+# Copie sur mon terminal au CNRGH pour visualiser le rapport html
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/results/QC/multiqc_report.html .
+
+``` 
+
+Lien vers le [rapport MultiQC](https://jupyterhub.cluster.france-bioinformatique.fr/user/schantalat/files/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/results/QC/multiqc_report.html?_xsrf=2%7C872afc6b%7C8e6511a454ec9f12077eb7a45505bbfd%7C1617705099)
+
+Est-ce que les reads déposés ont subi une étape de nettoyage avant d'être déposés ? Pourquoi ?
+
+- [X] Oui
+- [ ] Non
+
+car <code> la longueur des reads varie entre 130-151 pb, ce qui indique qu'il y a eu dans certains cas un trimming </code>
+
+
+Quelle est la profondeur de séquençage (calculée par rapport à la taille du génome de référence) ?
+J'ai appliqué la formule 
+(number of reads  * average read length) / total length of the genome. )
+
+J'ai recherché dans le rapport multiqc (multiqc_general_stats.txt), les colonnes contenant les nombres de reads et le longeur moyenne des reads puis j'ai calcule le nombre de bases total couvert par les reads.
+
+
+```{bash}
+cd ../QC
+cat multiqc_general_stats.txt | cut -f 4,6 > multiqc_forRead_depth
+
+awk '{print $1*$2}'  multiqc_forRead_depth | awk '{print $1}'
+
+```
+1057270000
+1062807718
+
+
+J'ai ensuite réalisé l'opération (number of reads mapped * average read length) / total length of the genome. )
+(1057270000 + 1062807718) / 4215606 = 503
+
+
+La profondeur de séquençage est de : <code>503</code> X.
+
+
+## Nettoyage des reads
+
+Vous voulez maintenant nettoyer un peu vos lectures. Choisissez les paramètres de <strong class="tool">fastp</strong> @fastp qui vous semblent adéquats et justifiez-les.
+
+```{bash}
+module load fastp/0.20.0 
+
+srun --cpus-per-task 8 fastp --in1 FASTQ/SRR10390685_1.fastq.gz --in2 FASTQ/SRR10390685_2.fastq.gz --out1 CLEANING/SRR10390685_1.cleaned_filtered.fastq.gz --out2 CLEANING/SRR10390685_2.cleaned_filtered.fastq.gz --html CLEANING/fastp.html --thread 8 --cut_mean_quality 30 --cut_window_size 8 --length_required 100 --cut_tail --json CLEANING/fastp.json
+
+# je vérifie mon étape de cleaning :
+
+cd ../CLEANING
+
+seqkit stats *.fastq.gz
+
+```
+
+Les paramètres suivants ont été choisis : 
+
+
+|Parametre | Valeur | Explication |
+|----------|--------|-------------|
+|cut_mean_quality  | 30 |la majorité des bases passent le Q30 sur l'ensemble des reads R1 et R2, donc on peut être stringent  |
+|length_required   | 100 | je demande de conserver uniquement les reads d'une taille sup à 100 nt, la longueur des reads variant entre 130-151 pb, je peux choisir cette longueur minimum, qui reste suffisante pour réaliser l'alignement   |
+|cut_tail  | 30 | coupure en 3' du read si la qualité n'atteint pas le threshold (Q30, défini par cut-mean_quality),ce qui est justifié puisque la qualité diminue en 3' |
+
+Ces paramètres ont permis de conserver <code>6,777,048</code> reads pairés, soit une perte de <code>4,1</code>% des reads bruts.
+
+
+## Alignement des reads sur le génome de référence
+
+Maintenant, vous allez aligner ces reads nettoyés sur le génome de référence à l'aide de <strong class="tool">bwa</strong> @bwa et <strong class="tool">samtools</strong> @samtools.
+
+```{bash}
+
+module load bwa/0.7.17
+
+# j'indexe le génome avant de procéder à l'alignement avec bwa index.
+# J'ai décompressé le .fna préalablement
+
+cd ../../data/
+
+gunzip GCF_000009045.1_ASM904v1_genomic.fna.gz
+bwa index GCF_000009045.1_ASM904v1_genomic.fna index_prefix
+
+# J'ai augmenté le nombre de cpu par task et la mémoire (car j'ai eu un premier test avec un retour OUT-OF-MEMORY).
+salloc --cpus-per-task=32 --mem=4G
+
+# Lancement de l'alignement
+
+srun --cpus-per-task=32 bwa mem GCF_000009045.1_ASM904v1_genomic.fna ../results/CLEANING/SRR10390685_1.cleaned_filtered.fastq.gz ../results/CLEANING/SRR10390685_2.cleaned_filtered.fastq.gz -t 32 > ../results/MAPPING/SRR10390685onASM904v1.sam
+
+```
+
+Combien de reads ne sont pas mappés ?
+
+Préalablement, Conversion du sam en bam et indexing du bam : 
+```{bash}
+
+cd ../results/MAPPING/
+
+module load samtools/1.10
+
+# conversion du sam en bam:
+srun --cpus-per-task=8 samtools view --threads 8 SRR10390685onASM904v1.sam -b > SRR10390685onASM904v1.bam
+
+#Tri du bam généré (nécessaire pour certaines commandes, notamment avec bedtools)
+srun samtools sort SRR10390685onASM904v1.bam -o SRR10390685onASM904v1.sort.bam
+
+#Indexing du bam (je génère le bai car il peut être utile notamment pour certaines conversion, comme le wig et bw)
+srun samtools index SRR10390685onASM904v1.sort.bam
+
+```
+
+Elimination du fichier sam, qui n'est plus utile.
+```{bash}
+rm SRR10390685onASM904v1.sam
+```
+
+Détermination du nombre de reads non mappés :
+```{bash}
+ srun samtools idxstats SRR10390685onASM904v1.sort.bam > SRR10390685onASM904v1.sort.bam.idxstats
+ srun samtools flagstat SRR10390685onASM904v1.sort.bam > SRR10390685onASM904v1.sort.bam.flagstat
+ 
+```
+
+Dans l'output flagstat, on voit que l'on a eu 94% d'alignement. Dans l'output idxstats, on retouve le nombre de reads non mappés : 
+<code>40266</code> reads ne sont pas mappés.
+
+
+## Croisement de données
+
+Calculez le nombre de reads qui chevauchent avec au moins 50% de leur longueur le gène _trmNF_ grâce à l'outil <strong class="tool">bedtools</strong> @bedtools:
+
+```{bash}
+gunzip ../data/GCF_000009045.1_ASM904v1_genomic.gff.gz
+
+# Récupération des informations relatives au gène trmNF dans le fichier d'annotation gff.
+cat ../../data/GCF_000009045.1_ASM904v1_genomic.gff | grep "ID=gene" | grep "trmNF" > ../data/trmNF.gff
+
+# à partir des intervalles (ccordonnées), je vais pouvoir rechercher combien de reads mappés chevauchent le gène trmNF (je suis dans le répertoire MAPPING): 
+
+module load bedtools/2.29.2 
+
+# Recherche des reads qui chevauchent le gène trmNF avec au moins 1bp en commun :
+srun bedtools intersect -a SRR10390685onASM904v1.sort.bam -b ../../data/trmNF.gff > SRR10390685ontrmNF.bam
+
+# Recherche des reads qui chevauchent le gène trmNF avec au moins 50% des bases du read :
+
+srun bedtools intersect -a SRR10390685onASM904v1.sort.bam -b ../../data/trmNF.gff -f 0.5 > SRR10390685ontrmNF_overlap50.bam
+
+# comptage du nombre de reads : 
+samtools view SRR10390685ontrmNF_overlap50.bam | grep "^SRR" | wc -l
+
+```
+
+<code> 2801</code> reads chevauchent le gène d'intérêt.
+
+
+## Visualisation
+
+Utilisez <strong class="tool">IGV</strong> @igv sous [sa version en ligne](https://igv.org/app/) pour visualiser les alignements sur le gène. Faites une capture d'écran du gène entier.
+
+Indexing du fasta et des fichiers bam
+```{bash}
+# création de l'index sur les reads alignés :
+srun samtools faidx SRR10390685onASM904v1.sort.bam
+
+srun samtools sort SRR10390685ontrmNF_overlap50.bam -o SRR10390685ontrmNF_overlap50.sort.bam
+srun samtools faidx SRR10390685ontrmNF_overlap50.sort.bam
+
+# création de l'index du génome :
+cd ../../data/
+srun samtools faidx GCF_000009045.1_ASM904v1_genomic.fna
+```
+
+Transfert sur mon répertoire de travail sur le cluster du CNRGH: 
+```{bash}
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/data/GCF_000009045.1_ASM904v1_genomic.fna .
+
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/results/MAPPING/*.bam .
+
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/results/MAPPING/*.bai .
+
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/data/GCF_000009045.1_ASM904v1_genomic.fna.fai .
+
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/results/MAPPING/SRR10390685ontrmNF_overlap50.sort.bam* .
+
+cd ../
+
+```
+
+Visualisation sous IGV
+Download en référence du .fna et de l'endex correspondant, et en data, le fichier SRR10390685ontrmNF_overlap50.sort.bam et son index. En contrôle, j'ai également entré le fichier d'alignement complet SRR10390685ontrmNF.sort.bam et son index.
+Je me suis placée en mode squish pour obtenir une meilleure visualisation (plus adapté lorsque le nombre de reads est élevé).
+ 
+![](Trm_file.png)
+
+
+# Résumé des data générés dans le cadre du projet :
+peut être retrouvé en suivant /shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project (avec la commande "tree")
+
+
+![](files_projetM5.png)
+
+## Transfert du Rmarkdown et du htlm du ce projet dans mon github 
+```{bash}
+# Transfert dans mon répertoire de travail au CNRGH :
+
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/doc/Evaluation_Chantalat_Module5_6_20210413.Rmd .
+
+scp schantalat@core.cluster.france-bioinformatique.fr:/shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/doc/Evaluation_Chantalat_Module5_6_20210413.html .
+
+
+# sur le cluster de l'IFB : copie ds DuBII de mes deux fichiers à transférer
+cd /shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/doc/
+
+cp Evaluation_Chantalat_Module5_6_20210413.html Evaluation_Chantalat_Module5_6_20210413.Rmd /shared/home/schantalat/Evaluation_M5-6/Bacillus_subtilis_Project/doc/DuBII2021/
+
+
+git clone git@github.com:sophiechroma/DuBII2021
+
+# vérifiation du status de mon git (qu'il n'y a rien en attente)
+git status
+
+# ajout de mon dossier
+git add Evaluation_Chantalat_Module5_6_20210413.html Evaluation_Chantalat_Module5_6_20210413.Rmd 
+
+# On commit puis on le push vers le github sur la branche principale
+git status
+git commit -m "Transfert_Dossier_Final_EvalM5-6_20210414"
+git status
+git push origin master
+```
